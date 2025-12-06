@@ -1,11 +1,4 @@
 # app.py
-import sys
-from pathlib import Path
-
-# 获取项目根目录 (ui/app.py 的上一级的上一级)
-# __file__ = ui/app.py -> parent = ui/ -> parent = academic-agent/
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.append(str(PROJECT_ROOT))
 import streamlit as st
 
 # 必须是第一个 Streamlit 命令

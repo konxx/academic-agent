@@ -1,19 +1,15 @@
-from typing import TypedDict, List
+from typing import TypedDict, List, Annotated
 from langchain_core.documents import Document
+from langchain_core.messages import AnyMessage # 👈 引入 Message
+from langgraph.graph.message import add_messages # 👈 引入 reducer
 
 class ResearchState(TypedDict):
-    """
-    Research 工作流的状态
-    """
-    # 1. 输入
+    # --- 核心修改：增加 messages 字段 ---
+    # add_messages 会自动把新消息追加到历史列表里，而不是覆盖
+    messages: Annotated[List[AnyMessage], add_messages] 
+    
     question: str
-    
-    # 2. 决策与中间变量
-    router_decision: str       # "retrieve" (只查库) 或 "web_search" (查库+联网)
-    search_queries: List[str]  # 生成的联网搜索关键词
-    
-    # 3. 核心上下文 (混合了 Qdrant 的文档和 Web 的搜索结果)
+    router_decision: str
+    search_queries: List[str]
     context: List[Document]
-    
-    # 4. 输出
     answer: str

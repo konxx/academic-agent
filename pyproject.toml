@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "academic_agent"
+version = "0.1.0"
+description = "AI Academic Research Assistant with Visual RAG"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your_email@example.com"}
+]
+
+# 这里列出所有的依赖库 (替代 requirements.txt)
+dependencies = [
+    "langchain>=0.2.0",
+    "langchain-core",
+    "langchain-community",
+    "langchain-openai",
+    "langchain-text-splitters",
+    "langchain-qdrant",
+    "langgraph",
+    "streamlit>=1.35.0",
+    "qdrant-client",
+    "pydantic-settings",
+    "python-dotenv",
+    "pyyaml",
+    "pymupdf",         # 视觉提取 PDF
+    "tavily-python",   # 联网搜索
+    "watchdog"         # Streamlit 监控
+]
+
+[tool.setuptools.packages.find]
+# 自动发现项目里的包 (即 core, graph, ui, config 等)
+where = ["."]
+include = ["core*", "graph*", "config*", "ui*", "utils*"]

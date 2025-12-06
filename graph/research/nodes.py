@@ -2,7 +2,7 @@ import json
 import yaml
 from typing import Dict, Any, List
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 
@@ -134,6 +134,7 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
     logger.info("✍️ Processing Node: Writer")
     question = state["question"]
     context_docs = state.get("context", [])
+    messages = state.get("messages", [])
     
     if not context_docs:
         return {"answer": "抱歉，我没有找到任何相关资料，无法回答您的问题。"}
@@ -144,25 +145,43 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         source = doc.metadata.get("title", "Web Search")
         venue = doc.metadata.get("venue", "")
         year = doc.metadata.get("year", "")
-        context_str += f"\n--- Reference {i+1} ({source} | {venue} {year}) ---\n{doc.page_content}\n"
+        context_str += f"\n--- Reference {i+1} ---\n{doc.page_content}\n"
     
-    # 2. 调用 LLM 写作
-    # 这里建议用 DeepSeek Reasoner (R1) 或 GPT-4o，逻辑能力强
+    # 2. 🌟 格式化历史消息 (核心修改)
+    # 把最近的对话变成字符串，喂给模型
+    history_str = ""
+    #recent_history = messages[:-1][-10:] 
+    #取剩下历史中的最后 10 条 (即最近 5 轮问答),如果你想保留 10 轮，就改成 [-20:]
+    recent_history = messages[:-1] # 不包含当前最新的这条问题
+    for msg in recent_history:
+        role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+        history_str += f"{role}: {msg.content}\n"
+    
+    # 3. 调用 LLM
     llm = get_agent_llm(temperature=0.7) 
     prompt_cfg = PROMPTS["write_review"]
     
-    messages = [
-        SystemMessage(content=prompt_cfg["system"].format(
-            context=context_str,
-            question=question
-        )),
-        HumanMessage(content=prompt_cfg["user"].format(question=question))
+    system_msg = prompt_cfg["system"].format(
+        context=context_str,
+        chat_history=history_str, # 👈 注入历史
+        question=question
+    )
+    
+    msg_payload = [
+        SystemMessage(content=system_msg),
+        HumanMessage(content=question)
     ]
     
     try:
-        response = llm.invoke(messages)
+        response = llm.invoke(msg_payload)
         logger.info("   ✅ Answer generated.")
-        return {"answer": response.content}
+        
+        # 🌟 关键：返回 messages 以便 LangGraph 自动保存
+        # 我们返回一个 AIMessage，add_messages 会自动把它追加到历史里
+        return {
+            "answer": response.content,
+            "messages": [AIMessage(content=response.content)] 
+        }
     except Exception as e:
         logger.error(f"❌ Writing failed: {e}")
-        return {"answer": "生成回答时出现错误。"}
+        return {"answer": "Error generating answer."}
