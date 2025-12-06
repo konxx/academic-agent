@@ -19,8 +19,8 @@
 *   **核心框架**: [LangChain](https://www.langchain.com/), [LangGraph](https://langchain-ai.github.io/langgraph/)
 *   **大语言模型 (LLM)**:
     *   **Agent (思考/规划)**: DeepSeek Reasoner (R1)
-    *   **Extractor (提取/摘要)**: DeepSeek Chat (V3)
-*   **Embedding**: Qwen (Text Embedding v4 via DashScope)
+    *   **Extractor (提取/摘要)**: Qwen (Qwen3-VL-Plus)
+*   **Embedding**: Qwen (Text Embedding v4)
 *   **向量数据库**: [Qdrant](https://qdrant.tech/) (Cloud)
 *   **用户界面**: [Streamlit](https://streamlit.io/)
 *   **工具**: PyMuPDF (PDF 处理), Tavily (联网搜索)

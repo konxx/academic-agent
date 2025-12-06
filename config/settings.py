@@ -47,15 +47,15 @@ class Settings(BaseSettings):
     AGENT_MODEL_NAME: str = Field(default="deepseek-reasoner")
 
     # ==========================
-    # 3. Extractor 模型 (DeepSeek Chat / V3)
+    # 3. Extractor 模型 (Qwen)
     # ==========================
     # 用于快速的 PDF 信息提取、简单摘要
     EXTRACTOR_BASE_URL: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1")
-    EXTRACTOR_API_KEY: str = Field(..., description="DeepSeek API Key")
-    EXTRACTOR_MODEL_NAME: str = Field(default="deepseek-chat")
+    EXTRACTOR_API_KEY: str = Field(..., description="DashScope API Key")
+    EXTRACTOR_MODEL_NAME: str = Field(default="qwen3-vl-plus")
 
     # ==========================
-    # 4. Embedding 模型 (Qwen / DashScope)
+    # 4. Embedding 模型 (Qwen)
     # ==========================
     # 阿里通义千问 embedding-v4
     EMBEDDING_BASE_URL: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1")
