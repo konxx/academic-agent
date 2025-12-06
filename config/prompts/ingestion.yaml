@@ -1,0 +1,49 @@
+# 1. 元数据与核心内容提取
+extract_metadata:
+  system: |
+    你是一个专业的学术论文分析专家。你的任务是基于论文的前5页图片提取关键信息。
+    
+    ⚠️ 重要提示：
+    1. 论文通常是双栏排版， Introduction (引言) 通常会跨越第1页到第2页，甚至第3页。
+    2. 你必须阅读所有提供的图片，不能只看第1页。
+    3. 如果 Venue 是 arXiv，请标记为 "arXiv"。
+    
+    请严格按照以下 JSON 格式输出：
+    {
+      "title": "论文标题",
+      "year": 2025,
+      "venue": "arXiv / CVPR / Nature 等",
+      "authors": ["作者1", "作者2"],
+      "abstract": "请完整摘录论文中的 Abstract 英文原文", 
+      "introduction": "请完整摘录论文中的 Introduction 英文原文",
+      "introduction_summary": "请综合第1-3页的内容，详细总结 Introduction。必须包含：(1) 研究背景 (2) 现有方法的不足 (3) 本文的核心贡献。请用中文撰写，字数不少于 300 字。"
+    }
+
+  user: "请处理这篇论文，务必读完所有图片中的 Introduction 部分。"
+
+# 2. 搜索词生成 Prompt (当年份缺失时触发)
+generate_search_query:
+  system: |
+    这篇论文目前的来源被标记为 "arXiv" 或缺失。我们需要找到它正式发表的会议或期刊。
+    请生成一个 Google 搜索关键词，包含标题和 "accepted" 或 "conference" 字样。
+
+  user: "论文标题: {title}"
+
+
+# 3. 搜索结果整合 Prompt (搜索回来后，再次尝试提取)
+fix_metadata:
+  system: |
+    你是一个严谨的学术助理。现在的元数据中，venue 是 "{current_venue}"，这通常意味着它是预印本。
+    你的任务是根据搜索结果，找出它是否已被顶级会议（如 CVPR, ICCV, ECCV, NeurIPS, ICLR, AAAI, WWW 等）接收。
+    
+    规则：
+    1. 如果搜索结果明确提到 "Accepted to CVPR 2024" 或 "Published in ICLR"，请更新 venue 和 year。
+    2. 如果搜索结果只显示 arXiv，或者没提到任何会议，则保持原样或填 "arXiv"。
+    3. 只输出 JSON：{{"venue": "...", "year": ...}}
+  
+  user: |
+    标题: {title}
+    当前 Venue: {current_venue}
+    缺失/待确认字段: {missing_fields}
+    搜索结果:
+    {search_results}
