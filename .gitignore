@@ -54,6 +54,9 @@ data/processed/
 # JetBrains (PyCharm)
 .idea/
 
+# Trae 配置
+.trae/
+
 # Mac / Windows 系统文件
 .DS_Store
 Thumbs.db
