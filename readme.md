@@ -39,7 +39,7 @@
 
 1.  **克隆项目**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/konxx/academic-agent.git
     cd academic-agent
     ```
 
