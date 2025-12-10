@@ -1,12 +1,11 @@
 # --- Core Framework (核心框架) ---
 langchain>=0.2.0
 langchain-core>=0.2.0
-langchain-community>=0.2.0
 langgraph>=0.1.0                # 核心：用于构建循环图 (Cyclic Graph)
+langgraph-checkpoint-sqlite>=1.0.0 # SQLite 持久化
 
 # --- LLM Providers (模型接口) ---
 langchain-openai>=0.1.0         # 连接 OpenAI 协议模型 (含 DeepSeek API)
-langchain-ollama>=0.1.0         # 连接本地 Ollama 模型
 
 # --- Vector Database (向量数据库) ---
 qdrant-client>=1.9.0            # Qdrant 官方客户端
@@ -23,13 +22,12 @@ python-dotenv>=1.0.0            # 加载 .env 文件
 pyyaml>=6.0.0                   # 解析 YAML 格式的 Prompts
 
 # --- Document Processing (文档处理) ---
-pypdf>=4.2.0                    # 轻量级 PDF 解析 (推荐)
-# pdfplumber>=0.11.0            # (可选) 如果 pypdf 解析不佳，可用这个作为备选
+pymupdf>=1.24.0                 # 高性能 PDF 解析 (fitz)
 tiktoken>=0.7.0                 # 计算 Token 数 (切分文本时必须)
+langchain-text-splitters>=0.2.0 # 文本切分器
 
 # --- Web Search Tools (联网搜索) ---
-duckduckgo-search>=6.1.0        # 免费的搜索工具
-tavily-python>=0.3.0            # 专为 Agent 设计的搜索 API (推荐申请一个免费 Key)
+tavily-python>=0.3.0            # 专为 Agent 设计的搜索 API
 
 # --- Testing & Dev (测试与开发) ---
 pytest>=8.2.0                   # 单元测试框架
