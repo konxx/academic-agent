@@ -1,5 +1,6 @@
+import sqlite3  # 👈 必须导入这个标准库
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver # 👈 确保导入的是 SqliteSaver
 
 from graph.research.state import ResearchState
 from graph.research.nodes import (
@@ -62,8 +63,13 @@ def build_research_graph():
     # 4. Writer -> End (写完结束)
     workflow.add_edge("writer", END)
 
-    # D. 编译
-    return workflow.compile(checkpointer=MemorySaver())
+    # D. 编译 (Compile)
+    # 🌟 修改点：使用 SQLite 持久化存储
+    # check_same_thread=False 是 Streamlit 多线程环境下必须的
+    conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+    memory = SqliteSaver(conn)
+
+    return workflow.compile(checkpointer=memory)
 
 # 实例化 App
 research_app = build_research_graph()

@@ -7,6 +7,7 @@
 # Streamlit 本地秘钥
 .streamlit/secrets.toml
 
+
 # ==========================
 # 2. Python 环境与缓存
 # ==========================
@@ -45,6 +46,7 @@ data/processed/
 # 4. IDE 与编辑器配置
 # ==========================
 # VS Code
+.vscode/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json

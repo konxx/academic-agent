@@ -29,6 +29,11 @@ def router_node(state: ResearchState) -> Dict[str, Any]:
     分析用户意图：是只查本地知识库，还是需要联网？
     """
     logger.info("🚦 Processing Node: Router")
+
+    if not state.get("allow_web_search", True):
+        logger.info("   🚫 Web search disabled by user. Forcing local retrieval.")
+        return {"router_decision": "retrieve"}
+    
     question = state["question"]
     
     llm = get_agent_llm(temperature=0) # 决策需要稳定
@@ -61,6 +66,7 @@ def retrieve_node(state: ResearchState) -> Dict[str, Any]:
     """
     logger.info("🔍 Processing Node: Local Retriever")
     question = state["question"]
+    top_k = state.get("top_k", 5)
     
     try:
         client = qdrant_manager.client
@@ -73,8 +79,8 @@ def retrieve_node(state: ResearchState) -> Dict[str, Any]:
         )
         
         # 检索 Top 5 (根据之前的合成文档，这里检索到的已经是高质量 Summary 了)
-        docs = vector_store.similarity_search(question, k=5)
-        logger.info(f"   ✅ Retrieved {len(docs)} documents from Qdrant.")
+        docs = vector_store.similarity_search(question, k=top_k)
+        logger.info(f"   ✅ Retrieved {len(docs)} documents (Top-k={top_k}).")
         
         return {"context": docs} # 将结果存入 context
         
@@ -125,13 +131,14 @@ def web_search_node(state: ResearchState) -> Dict[str, Any]:
     }
 
 # ==========================================
-# Node 4: 综述撰写节点 (Writer)
+# Node 4: 撰写节点 (Writer)
 # ==========================================
 def writer_node(state: ResearchState) -> Dict[str, Any]:
     """
     读取 Context -> 生成最终回答
     """
     logger.info("✍️ Processing Node: Writer")
+    temperature = state.get("temperature", 0.5)
     question = state["question"]
     context_docs = state.get("context", [])
     messages = state.get("messages", [])
@@ -158,9 +165,8 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         history_str += f"{role}: {msg.content}\n"
     
     # 3. 调用 LLM
-    llm = get_agent_llm(temperature=0.7) 
+    llm = get_agent_llm(temperature=temperature) 
     prompt_cfg = PROMPTS["write_review"]
-    
     system_msg = prompt_cfg["system"].format(
         context=context_str,
         chat_history=history_str, # 👈 注入历史
@@ -176,11 +182,35 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         response = llm.invoke(msg_payload)
         logger.info("   ✅ Answer generated.")
         
-        # 🌟 关键：返回 messages 以便 LangGraph 自动保存
-        # 我们返回一个 AIMessage，add_messages 会自动把它追加到历史里
+        # 增加参考文献
+        ref_section = "\n\n---\n### 📚 References\n"
+        for i , doc in enumerate(context_docs):
+            meta = doc.metadata
+            index = i+1
+            # 判断联网还是本地
+            if meta.get("source") == "web_search":
+                query = meta.get("query", "General Search")
+                ref_section += f"**[{index}]** 🌐 **Web Search**: *{query}* (Content from Tavily)\n"
+            else:
+                # 论文来源
+                title = meta.get("title", "Unknown Title")
+                venue = meta.get("venue", "Unknown Venue")
+                year = meta.get("year", "N/A")
+                authors = meta.get("authors", [])
+                if isinstance(authors, list) and len(authors) > 0:
+                    auth_str = ", ".join(authors[:2])
+                    if len(authors) > 2:
+                        auth_str += " et al."
+                else:
+                    auth_str = str(authors) if authors else "Unknown Authors"
+
+                ref_section += f"**[{index}]** 📄 **{title}**\n"
+                ref_section += f"   - *{auth_str}* | {venue}, {year}\n"
+        final_content = response.content + ref_section
+        
         return {
-            "answer": response.content,
-            "messages": [AIMessage(content=response.content)] 
+            "answer": final_content,
+            "messages": [AIMessage(content=final_content)] 
         }
     except Exception as e:
         logger.error(f"❌ Writing failed: {e}")

@@ -13,3 +13,6 @@ class ResearchState(TypedDict):
     search_queries: List[str]
     context: List[Document]
     answer: str
+    allow_web_search: bool
+    top_k: int
+    temperature: float
