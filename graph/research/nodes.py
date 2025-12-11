@@ -183,14 +183,14 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         logger.info("   ✅ Answer generated.")
         
         # 增加参考文献
-        ref_section = "\n\n---\n### 📚 References\n"
+        ref_section = "\n\n---\n### 📚 References\n\n"
         for i , doc in enumerate(context_docs):
             meta = doc.metadata
             index = i+1
             # 判断联网还是本地
             if meta.get("source") == "web_search":
                 query = meta.get("query", "General Search")
-                ref_section += f"**[{index}]** 🌐 **Web Search**: *{query}* (Content from Tavily)\n"
+                ref_section += f"**[{index}]** 🌐 **Web Search**: *{query}* (Content from Tavily)\n\n"
             else:
                 # 论文来源
                 title = meta.get("title", "Unknown Title")
@@ -205,7 +205,7 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
                     auth_str = str(authors) if authors else "Unknown Authors"
 
                 ref_section += f"**[{index}]** 📄 **{title}**\n"
-                ref_section += f"   - *{auth_str}* | {venue}, {year}\n"
+                ref_section += f"   - *{auth_str}* | {venue}, {year}\n\n"
         final_content = response.content + ref_section
         
         return {
