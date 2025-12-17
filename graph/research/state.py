@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Annotated
+from typing import TypedDict, List, Annotated, Optional
 from langchain_core.documents import Document
 from langchain_core.messages import AnyMessage # 👈 引入 Message
 from langgraph.graph.message import add_messages # 👈 引入 reducer
@@ -16,3 +16,4 @@ class ResearchState(TypedDict):
     allow_web_search: bool
     top_k: int
     temperature: float
+    uploaded_file_path: Optional[str]

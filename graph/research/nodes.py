@@ -7,9 +7,10 @@ from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
 
 from config.settings import settings
-from core.llm import get_agent_llm, get_embeddings
+from core.llm import get_agent_llm, get_embeddings, get_extractor_llm
 from core.qdrant import qdrant_manager
 from core.search import search_tool
+from core.pdf_loader import load_pdf_as_images
 from graph.research.state import ResearchState
 from utils.logger import logger
 
@@ -58,16 +59,53 @@ def router_node(state: ResearchState) -> Dict[str, Any]:
         return {"router_decision": "web_search"}
 
 # ==========================================
-# Node 2: 本地检索节点 (Retriever)
+# Node 2: 本地检索节点 (Retriever) + 上传处理
 # ==========================================
 def retrieve_node(state: ResearchState) -> Dict[str, Any]:
     """
-    从 Qdrant 检索相关文档
+    1. 处理上传的 PDF (如果有) -> 转换为 Text
+    2. 从 Qdrant 检索相关文档
     """
-    logger.info("🔍 Processing Node: Local Retriever")
+    logger.info("🔍 Processing Node: Retriever & Processor")
     question = state["question"]
     top_k = state.get("top_k", 5)
+    uploaded_path = state.get("uploaded_file_path")
     
+    context_docs = []
+
+    # --- A. 处理临时上传的文件 ---
+    if uploaded_path:
+        try:
+            logger.info(f"   📄 Processing Uploaded PDF: {uploaded_path}")
+            # 1. 转图片
+            images = load_pdf_as_images(uploaded_path, max_pages=100)
+            
+            # 2. 视觉模型提取摘要
+            llm = get_extractor_llm()
+            user_content = [
+                {"type": "text", "text": "Please analyze these images of a research paper. Provide a comprehensive summary including: Title, Authors, Key Contributions, Methodology, Main Results, and Limitations. This summary will be used to compare with other papers."}
+            ]
+            for img_b64 in images:
+                user_content.append({
+                    "type": "image_url", 
+                    "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+                })
+            
+            msg = [HumanMessage(content=user_content)]
+            response = llm.invoke(msg)
+            
+            # 3. 封装为 Document
+            upload_doc = Document(
+                page_content=f"--- [UPLOADED TARGET PAPER] ---\n{response.content}",
+                metadata={"title": "Uploaded User Paper", "source": "uploaded_file", "year": "Current"}
+            )
+            context_docs.append(upload_doc)
+            logger.info("   ✅ Uploaded file processed and added to context.")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Failed to process upload: {e}")
+
+    # --- B. Qdrant 检索 ---
     try:
         client = qdrant_manager.client
         embedding_model = get_embeddings()
@@ -78,15 +116,16 @@ def retrieve_node(state: ResearchState) -> Dict[str, Any]:
             embedding=embedding_model
         )
         
-        # 检索 Top 5 (根据之前的合成文档，这里检索到的已经是高质量 Summary 了)
+        # 检索 Top K
         docs = vector_store.similarity_search(question, k=top_k)
-        logger.info(f"   ✅ Retrieved {len(docs)} documents (Top-k={top_k}).")
+        logger.info(f"   ✅ Retrieved {len(docs)} documents from DB.")
         
-        return {"context": docs} # 将结果存入 context
+        context_docs.extend(docs)
         
     except Exception as e:
         logger.error(f"❌ Retrieval failed: {e}")
-        return {"context": []}
+    
+    return {"context": context_docs}
 
 # ==========================================
 # Node 3: 联网搜索节点 (Web Search)
@@ -152,13 +191,14 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         source = doc.metadata.get("title", "Web Search")
         venue = doc.metadata.get("venue", "")
         year = doc.metadata.get("year", "")
-        context_str += f"\n--- Reference {i+1} ---\n{doc.page_content}\n"
+        # 标记上传的文件
+        if doc.metadata.get("source") == "uploaded_file":
+            source = "[User Uploaded PDF]"
+            
+        context_str += f"\n--- Reference {i+1} ({source}) ---\n{doc.page_content}\n"
     
-    # 2. 🌟 格式化历史消息 (核心修改)
-    # 把最近的对话变成字符串，喂给模型
+    # 2. 格式化历史消息
     history_str = ""
-    #recent_history = messages[:-1][-10:] 
-    #取剩下历史中的最后 10 条 (即最近 5 轮问答),如果你想保留 10 轮，就改成 [-20:]
     recent_history = messages[:-1] # 不包含当前最新的这条问题
     for msg in recent_history:
         role = "User" if isinstance(msg, HumanMessage) else "Assistant"
@@ -169,7 +209,7 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
     prompt_cfg = PROMPTS["write_review"]
     system_msg = prompt_cfg["system"].format(
         context=context_str,
-        chat_history=history_str, # 👈 注入历史
+        chat_history=history_str, 
         question=question
     )
     
@@ -187,8 +227,10 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
         for i , doc in enumerate(context_docs):
             meta = doc.metadata
             index = i+1
-            # 判断联网还是本地
-            if meta.get("source") == "web_search":
+            
+            if meta.get("source") == "uploaded_file":
+                ref_section += f"**[{index}]** 📂 **User Uploaded PDF**: *Analyzed Content*\n\n"
+            elif meta.get("source") == "web_search":
                 query = meta.get("query", "General Search")
                 ref_section += f"**[{index}]** 🌐 **Web Search**: *{query}* (Content from Tavily)\n\n"
             else:
@@ -197,15 +239,15 @@ def writer_node(state: ResearchState) -> Dict[str, Any]:
                 venue = meta.get("venue", "Unknown Venue")
                 year = meta.get("year", "N/A")
                 authors = meta.get("authors", [])
+                
+                auth_str = "Unknown Authors"
                 if isinstance(authors, list) and len(authors) > 0:
                     auth_str = ", ".join(authors[:2])
-                    if len(authors) > 2:
-                        auth_str += " et al."
-                else:
-                    auth_str = str(authors) if authors else "Unknown Authors"
-
+                    if len(authors) > 2: auth_str += " et al."
+                
                 ref_section += f"**[{index}]** 📄 **{title}**\n"
                 ref_section += f"   - *{auth_str}* | {venue}, {year}\n\n"
+                
         final_content = response.content + ref_section
         
         return {

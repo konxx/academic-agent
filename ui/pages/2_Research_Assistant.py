@@ -2,9 +2,11 @@ import uuid
 import sqlite3
 import streamlit as st
 from langchain_core.messages import HumanMessage, AIMessage
+from pathlib import Path
 
 # --- 导入业务逻辑 ---
 from graph.research.workflow import research_app
+from config.settings import settings
 # --- 导入组件 ---
 from ui.components.chat_interface import render_chat_history, render_assistant_response
 from ui.components.state_visualizer import render_research_status
@@ -43,14 +45,12 @@ def delete_chat_history(thread_id: str):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # LangGraph 的 SqliteSaver 通常涉及 checkpoints, checkpoint_blobs, checkpoint_writes 表
-        # 我们尝试删除所有相关的 (如果表存在)
         tables = ["checkpoints", "checkpoint_blobs", "checkpoint_writes"]
         for table in tables:
             try:
                 cursor.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
             except sqlite3.OperationalError:
-                pass # 表可能不存在，忽略
+                pass 
         conn.commit()
         conn.close()
         return True
@@ -82,13 +82,36 @@ def clear_all_history():
 if "current_thread_id" not in st.session_state:
     st.session_state.current_thread_id = str(uuid.uuid4())
 
+# 用于存储上传的文件路径 (Session级别)
+if "uploaded_ref_path" not in st.session_state:
+    st.session_state.uploaded_ref_path = None
+
 with st.sidebar:
     # --- 新建对话 ---
     if st.button("➕ New Chat", use_container_width=True, type="primary"):
         st.session_state.current_thread_id = str(uuid.uuid4())
         st.session_state.messages = []
+        st.session_state.uploaded_ref_path = None # 重置上传
         st.rerun()
     
+    st.divider()
+
+    # --- 临时上传文献对比 ---
+    with st.expander("📂 Context Upload", expanded=True):
+        st.caption("Upload a paper to compare with knowledge base.")
+        uploaded_file = st.file_uploader("Upload PDF", type=["pdf"], key="ref_uploader")
+        
+        if uploaded_file:
+            # 保存文件
+            settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            save_path = settings.UPLOAD_DIR / f"temp_{uploaded_file.name}"
+            with open(save_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.session_state.uploaded_ref_path = str(save_path)
+            st.success("File ready for analysis!")
+        else:
+            st.session_state.uploaded_ref_path = None
+
     st.divider()
 
     # --- 设置 ---
@@ -101,7 +124,7 @@ with st.sidebar:
 
     st.divider()
 
-    # --- 历史记录标题区 (含清空按钮) ---
+    # --- 历史记录标题区 ---
     col_h1, col_h2 = st.columns([0.2, 0.3])
     with col_h1:
         st.write("**🕒 History**")
@@ -119,7 +142,7 @@ with st.sidebar:
         st.caption("No history found.")
     
     for t_id in history_threads:
-        # 1. 获取标题
+        # 获取标题
         label = f"Chat {t_id[:6]}.."
         try:
             sp_config = {"configurable": {"thread_id": t_id}}
@@ -133,10 +156,8 @@ with st.sidebar:
         except Exception:
             pass
 
-        # 2. 渲染按钮行 (Chat | Delete)
+        # 渲染按钮
         col_chat, col_del = st.columns([0.75, 0.25])
-        
-        # 激活状态判断
         is_active = (t_id == st.session_state.current_thread_id)
         
         with col_chat:
@@ -148,12 +169,12 @@ with st.sidebar:
             ):
                 st.session_state.current_thread_id = t_id
                 st.session_state.messages = []
+                st.session_state.uploaded_ref_path = None # 切换对话时清除临时文件
                 st.rerun()
         
         with col_del:
             if st.button("✕", key=f"del_{t_id}", help="Delete this chat", use_container_width=True):
                 if delete_chat_history(t_id):
-                    # 如果删除了当前正在看的对话，重置为新对话
                     if t_id == st.session_state.current_thread_id:
                         st.session_state.current_thread_id = str(uuid.uuid4())
                         st.session_state.messages = []
@@ -196,12 +217,14 @@ if prompt := st.chat_input("Ask about your papers..."):
         status_box = st.status("🤔 Agent is thinking...", expanded=True)
         final_answer = ""
         try:
+            # 注入上传文件路径
             initial_state = {
                 "question": prompt,
                 "messages": [HumanMessage(content=prompt)],
                 "allow_web_search": allow_web,
                 "top_k": top_k_val,
-                "temperature": temp_val
+                "temperature": temp_val,
+                "uploaded_file_path": st.session_state.uploaded_ref_path # 👈 传入文件路径
             }
             config = {"configurable": {"thread_id": thread_id}}
             
