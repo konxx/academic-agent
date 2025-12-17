@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     AGENT_MODEL_NAME: str = Field(default="deepseek-reasoner")
 
     # ==========================
+    # 3. Critic 模型 (Qwen3-Max)
+    # ==========================
+    # 用于代码质量评估、功能分析、安全考虑
+    CRITIC_BASE_URL: str = Field(default="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    CRITIC_API_KEY: str = Field(..., description="DashScope API Key")
+    CRITIC_MODEL_NAME: str = Field(default="qwen3-max")
+    
+    # ==========================
     # 3. Extractor 模型 (Qwen)
     # ==========================
     # 用于快速的 PDF 信息提取、简单摘要

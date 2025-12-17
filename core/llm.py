@@ -53,6 +53,19 @@ def get_embeddings() -> OpenAIEmbeddings:
         chunk_size=10
     )
 
+def get_critic_llm(temperature: float = 0.5) -> ChatOpenAI:
+    """
+    获取 Critic 模型 (如 Qwen3-Max)
+    用于: 代码质量评估、功能分析、安全考虑
+    """
+    return ChatOpenAI(
+        model=settings.CRITIC_MODEL_NAME,
+        api_key=settings.CRITIC_API_KEY,
+        base_url=settings.CRITIC_BASE_URL,
+        temperature=temperature,
+        max_retries=2,
+    )
+
 if __name__ == "__main__":
     # --- 测试脚本 ---
     # 运行: python -m core.llm
