@@ -1,241 +1,317 @@
 import streamlit as st
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 from typing import List, Dict, Any
 
-# --- 导入核心模块 ---
+# --- 核心模块导入 ---
 from core.qdrant import qdrant_manager
-from core.llm import get_embeddings
+from core.clustering import clustering_service
 from utils.logger import logger
 
-st.set_page_config(page_title="Topic Clustering", page_icon="🧬")
+st.set_page_config(page_title="Knowledge Clustering", page_icon="🧬", layout="wide")
 
 st.title("🧬 Knowledge Clustering")
-st.caption("多维语义分析：分析论文与多个研究主题的关联强度")
+st.caption("自动发现论文主题 + 交互式主题管理")
 
 # ==========================================
-# 1. Session State (关键词管理)
+# Session State 初始化
 # ==========================================
-if "cluster_keywords" not in st.session_state:
-    st.session_state.cluster_keywords = [""]
+if "clustering_result" not in st.session_state:
+    st.session_state.clustering_result = None
 
-def add_keyword():
-    st.session_state.cluster_keywords.append("")
+if "cluster_names" not in st.session_state:
+    st.session_state.cluster_names = {}
 
-def remove_keyword(index):
-    if len(st.session_state.cluster_keywords) > 0:
-        st.session_state.cluster_keywords.pop(index)
+if "current_labels" not in st.session_state:
+    st.session_state.current_labels = None
 
-# ==========================================
-# 2. 侧边栏：配置
-# ==========================================
-with st.sidebar:
-    st.header("⚙️ Analysis Config")
-    
-    top_k = st.slider("Max Papers per Topic", 1, 20, 5, help="每个关键词最多找出几篇论文？")
-    score_threshold = st.slider("Min Similarity", 0.0, 1.0, 0.2, help="过滤掉不相关的论文")
-    
-    st.divider()
-    st.markdown("### 🕵️‍♂️ Strict Mode")
-    strict_match = st.checkbox("Require Keyword Match", value=False, 
-                               help="选中后，论文必须包含至少一个关键词的文本")
 
 # ==========================================
-# 3. 辅助函数：余弦相似度计算
+# 辅助函数
 # ==========================================
-def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-    """计算两个向量的余弦相似度"""
-    a = np.array(v1)
-    b = np.array(v2)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return np.dot(a, b) / (norm_a * norm_b)
-
-# ==========================================
-# 4. 主界面：定义关键词
-# ==========================================
-st.subheader("1. Define Research Topics")
-st.info("输入多个关键词（如 'RAG', 'Agent', 'Evaluation'），我们将分析论文在这些维度上的得分。")
-
-# 渲染输入框
-for i, keyword in enumerate(st.session_state.cluster_keywords):
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        st.session_state.cluster_keywords[i] = st.text_input(
-            f"Topic #{i+1}", 
-            value=keyword, 
-            key=f"kw_{i}",
-            placeholder="Enter keyword..."
+def create_scatter_plot(viz_data: Dict, n_dims: int = 2) -> go.Figure:
+    """创建散点图可视化"""
+    if n_dims == 2:
+        fig = px.scatter(
+            x=viz_data["x"],
+            y=viz_data["y"],
+            color=viz_data["cluster_names"],
+            hover_name=viz_data["titles"],
+            title="📊 论文聚类可视化 (2D)",
+            labels={"x": "PC1", "y": "PC2", "color": "主题"},
         )
-    with col2:
-        if st.button("🗑️", key=f"del_{i}"):
-            remove_keyword(i)
-            st.rerun()
+    else:
+        fig = px.scatter_3d(
+            x=viz_data["x"],
+            y=viz_data["y"],
+            z=viz_data["z"],
+            color=viz_data["cluster_names"],
+            hover_name=viz_data["titles"],
+            title="📊 论文聚类可视化 (3D)",
+            labels={"x": "PC1", "y": "PC2", "z": "PC3", "color": "主题"},
+        )
+    
+    fig.update_layout(
+        height=600,
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+    )
+    return fig
 
-if st.button("➕ Add Topic"):
-    add_keyword()
-    st.rerun()
+
+# ==========================================
+# 主界面：自动聚类
+# ==========================================
+st.subheader("1. 配置聚类参数")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    clustering_method = st.selectbox(
+        "聚类算法",
+        ["K-Means (推荐)", "DBSCAN (自动发现)"],
+        help="K-Means 可指定主题数量，适合大论文库；DBSCAN 自动发现簇但可能不均匀"
+    )
+
+with col2:
+    pca_components = st.slider(
+        "PCA 降维维度",
+        10, 100, 50,
+        help="聚类前将向量降到多少维？较低维度可能发现更粗粒度的主题"
+    )
+
+st.markdown("### 📊 算法参数")
+
+if "K-Means" in clustering_method:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        n_clusters = st.slider(
+            "主题簇数量",
+            3, 30, 10,
+            help="将论文分为多少个主题？建议：50篇→5簇，200篇→10簇，500篇→15簇"
+        )
+    with col_b:
+        st.info("💡 建议根据论文库大小设置 **8-15 个**主题簇")
+else:
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        eps_value = st.slider(
+            "邻域半径 (eps)",
+            0.1, 2.0, 0.5, 0.05,
+            help="值越小，簇越多越细；值越大，簇越少越粗"
+        )
+    with col_b:
+        min_samples = st.slider(
+            "最小样本数",
+            2, 10, 3,
+            help="形成簇所需的最小邻居数"
+        )
+    with col_c:
+        st.warning("⚠️ DBSCAN 对参数敏感，如结果不均匀请调整 eps")
+
+generate_labels = st.checkbox(
+    "🏷️ 使用 AI 生成主题标签",
+    value=True,
+    help="调用 LLM 为每个簇生成描述性标签"
+)
 
 st.divider()
 
-# ==========================================
-# 5. 执行分析 (聚合去重 + 全量打分)
-# ==========================================
-st.subheader("2. Consolidated Results")
-
-if st.button("🚀 Start Multi-Topic Analysis", type="primary"):
-    valid_keywords = [k.strip() for k in st.session_state.cluster_keywords if k.strip()]
-    
-    if not valid_keywords:
-        st.warning("⚠️ Please enter at least one keyword.")
-    else:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
+if st.button("🚀 开始自动聚类", type="primary"):
+    with st.spinner("正在分析论文库..."):
         try:
-            embedding_model = get_embeddings()
-            client = qdrant_manager.client
-            collection_name = qdrant_manager.collection_name
+            progress = st.progress(0)
+            status = st.empty()
             
-            # --- 第一步：预计算所有关键词的向量 ---
-            status_text.text("🧠 Embedding keywords...")
-            keyword_vectors = {}
-            for kw in valid_keywords:
-                keyword_vectors[kw] = embedding_model.embed_query(kw)
+            status.text("📚 正在获取论文数据...")
+            papers = clustering_service.fetch_all_papers(limit=500)
+            progress.progress(20)
             
-            # --- 第二步：搜索候选论文 (聚合) ---
-            candidate_papers = {} # Map[id, {metadata, vector}]
-            
-            for idx, (kw, kw_vec) in enumerate(keyword_vectors.items()):
-                status_text.text(f"🔍 Searching candidates for '{kw}'...")
+            if len(papers) < 3:
+                st.warning("⚠️ 论文库中论文数量不足，请先上传更多论文。")
+            else:
+                status.text("📉 正在进行降维...")
+                vectors = np.array([p["vector"] for p in papers])
+                reduced = clustering_service.reduce_dimensions(vectors, n_components=pca_components)
+                progress.progress(40)
                 
-                # 注意：必须开启 with_vectors=True 才能在本地进行多维打分
-                search_result = client.query_points(
-                    collection_name=collection_name,
-                    query=kw_vec,
-                    limit=top_k,
-                    score_threshold=score_threshold,
-                    with_payload=True,
-                    with_vectors=True 
-                )
-                
-                hits = getattr(search_result, 'points', search_result)
-                
-                for hit in hits:
-                    # 使用 payload.get("source") 或 hit.id 作为唯一标识
-                    paper_id = hit.id 
-                    
-                    if paper_id not in candidate_papers:
-                        payload = hit.payload or {}
-                        # 兼容 LangChain 的 metadata 嵌套结构
-                        meta = payload.get("metadata", payload)
-                        
-                        candidate_papers[paper_id] = {
-                            "metadata": meta,
-                            "vector": hit.vector, # 获取向量
-                            "source_id": hit.id
-                        }
-                
-                progress_bar.progress((idx + 1) / (len(valid_keywords) + 1))
-
-            # --- 第三步：交叉打分与过滤 ---
-            status_text.text("📊 Calculating cross-topic scores...")
-            final_results = []
-            
-            for pid, data in candidate_papers.items():
-                meta = data["metadata"]
-                paper_vec = data["vector"]
-                
-                # 1. 严格模式检查 (文本匹配)
-                if strict_match:
-                    combined_text = (
-                        meta.get("title", "") + 
-                        meta.get("abstract", "") + 
-                        meta.get("introduction_summary", "")
-                    ).lower()
-                    
-                    # 只要包含任意一个关键词即可保留 (或者你可以改为必须包含所有)
-                    has_match = any(kw.lower() in combined_text for kw in valid_keywords)
-                    if not has_match:
-                        continue
-
-                # 2. 计算该论文对 *所有* 关键词的得分
-                scores = {}
-                total_score = 0
-                for kw, kw_vec in keyword_vectors.items():
-                    # 如果 paper_vec 是 None (某些旧数据可能没存向量)，则无法计算
-                    if paper_vec is None:
-                        sim = 0.0
-                    else:
-                        sim = cosine_similarity(kw_vec, paper_vec)
-                    
-                    scores[kw] = sim
-                    total_score += sim
-                
-                # 存入结果对象
-                final_results.append({
-                    "metadata": meta,
-                    "scores": scores,
-                    "avg_score": total_score / len(valid_keywords),
-                    "max_score": max(scores.values()) if scores else 0
-                })
-
-            # --- 第四步：排序与展示 ---
-            # 按最高匹配分排序
-            final_results.sort(key=lambda x: x["max_score"], reverse=True)
-
-            # 【新增】如果你想强制限制最终展示的总数量（例如只看全场最佳的 5 篇）
-            # final_results = final_results[:5]  <-- 取消注释这行即可截断
-            
-            progress_bar.empty()
-            status_text.empty()
-            
-            st.success(f"✅ Found {len(final_results)} unique papers relevant to your topics.")
-            
-            if not final_results:
-                st.warning("No papers met the criteria.")
-            
-            for item in final_results:
-                meta = item["metadata"]
-                scores = item["scores"]
-                
-                title = meta.get("title", "Unknown Title")
-                venue = meta.get("venue", "Unknown Venue")
-                year = meta.get("year", "N/A")
-                authors = meta.get("authors", [])
-                if isinstance(authors, list):
-                    authors_str = ", ".join(authors[:3]) + ("..." if len(authors) > 3 else "")
+                status.text("🧬 正在执行聚类...")
+                if "K-Means" in clustering_method:
+                    labels, n_found = clustering_service.auto_cluster_kmeans(reduced, n_clusters)
                 else:
-                    authors_str = str(authors)
+                    labels, n_found = clustering_service.auto_cluster_hdbscan(
+                        reduced,
+                        min_cluster_size=min_samples, 
+                        min_samples=min_samples,
+                        eps=eps_value
+                    )
+                progress.progress(60)
                 
-                # 外层容器
-                with st.container(border=True):
-                    # 标题行
-                    st.markdown(f"### 📄 {title}")
-                    st.caption(f"👤 {authors_str} | 🏛️ {venue} ({year})")
-                    
-                    st.divider()
-                    
-                    # 关键词得分展示区 (Grid Layout)
-                    st.markdown("**Topic Relevance:**")
-                    
-                    # 动态列布局：每行显示 4 个得分
-                    cols = st.columns(4)
-                    for i, (kw, score) in enumerate(scores.items()):
-                        col = cols[i % 4]
-                        # 根据分数高低显示不同颜色
-                        if score > 0.75:
-                            color = "green"
-                        elif score > 0.5:
-                            color = "orange"
-                        else:
-                            color = "gray"
-                            
-                        col.markdown(f"**{kw}**: :{color}[`{score:.4f}`]")
-
+                if generate_labels:
+                    status.text("🏷️ 正在生成主题标签...")
+                    grouped = clustering_service.group_papers_by_cluster(papers, labels)
+                    cluster_names = clustering_service.generate_cluster_labels(grouped)
+                else:
+                    cluster_names = {i: f"Cluster {i}" for i in set(labels)}
+                progress.progress(80)
+                
+                status.text("📊 正在准备可视化...")
+                viz_data = clustering_service.prepare_visualization_data(
+                    papers, labels, cluster_names, n_dims=3
+                )
+                progress.progress(100)
+                
+                st.session_state.clustering_result = {
+                    "papers": papers,
+                    "vectors": vectors,
+                    "reduced": reduced,
+                    "labels": labels,
+                    "cluster_names": cluster_names,
+                    "viz_data": viz_data
+                }
+                st.session_state.current_labels = labels
+                st.session_state.cluster_names = cluster_names
+                
+                progress.empty()
+                status.empty()
+                
+                st.success(f"✅ 聚类完成！发现 {n_found} 个主题簇，共 {len(papers)} 篇论文")
+                st.rerun()
+                
         except Exception as e:
-            st.error(f"❌ Analysis failed: {str(e)}")
+            st.error(f"❌ 聚类失败: {str(e)}")
             logger.error(f"Clustering Error: {e}")
-            if "with_vectors" in str(e):
-                st.info("💡 Hint: Ensure your Qdrant instance allows retrieving vectors.")
+
+# --- 显示聚类结果 ---
+if st.session_state.clustering_result:
+    result = st.session_state.clustering_result
+    papers = result["papers"]
+    labels = st.session_state.current_labels
+    cluster_names = st.session_state.cluster_names
+    
+    st.divider()
+    st.subheader("2. 聚类结果可视化")
+    
+    viz_col1, viz_col2 = st.columns([2, 1])
+    
+    with viz_col1:
+        viz_dims = st.radio("可视化维度", [2, 3], horizontal=True)
+        viz_data = clustering_service.prepare_visualization_data(
+            papers, labels, cluster_names, n_dims=viz_dims
+        )
+        fig = create_scatter_plot(viz_data, viz_dims)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with viz_col2:
+        st.markdown("### 📊 主题统计")
+        grouped = clustering_service.group_papers_by_cluster(papers, labels)
+        
+        for cluster_id in sorted(grouped.keys()):
+            if cluster_id == -1:
+                continue
+            cluster_papers = grouped[cluster_id]
+            name = cluster_names.get(cluster_id, f"Cluster {cluster_id}")
+            st.metric(
+                label=f"🏷️ {name}",
+                value=f"{len(cluster_papers)} 篇"
+            )
+    
+    st.divider()
+    st.subheader("3. 交互式簇管理")
+    
+    manage_col1, manage_col2 = st.columns(2)
+    
+    with manage_col1:
+        st.markdown("#### 🔗 合并簇")
+        cluster_ids = [k for k in grouped.keys() if k != -1]
+        clusters_to_merge = st.multiselect(
+            "选择要合并的簇",
+            options=cluster_ids,
+            format_func=lambda x: f"{cluster_names.get(x, f'Cluster {x}')} ({len(grouped.get(x, []))}篇)"
+        )
+        
+        if st.button("合并选中的簇") and len(clusters_to_merge) >= 2:
+            new_labels = clustering_service.merge_clusters(labels, clusters_to_merge)
+            st.session_state.current_labels = new_labels
+            target = min(clusters_to_merge)
+            merged_name = " + ".join([cluster_names.get(c, f"C{c}") for c in clusters_to_merge])
+            st.session_state.cluster_names[target] = merged_name
+            st.success("✅ 已合并簇")
+            st.rerun()
+    
+    with manage_col2:
+        st.markdown("#### ✂️ 拆分簇")
+        cluster_to_split = st.selectbox(
+            "选择要拆分的簇",
+            options=cluster_ids,
+            format_func=lambda x: f"{cluster_names.get(x, f'Cluster {x}')} ({len(grouped.get(x, []))}篇)"
+        )
+        n_splits = st.slider("拆分数量", 2, 5, 2)
+        
+        if st.button("拆分该簇"):
+            new_labels = clustering_service.split_cluster(
+                result["reduced"],
+                labels,
+                cluster_to_split,
+                n_splits
+            )
+            st.session_state.current_labels = new_labels
+            st.success("✅ 已拆分簇")
+            st.rerun()
+    
+    st.divider()
+    st.markdown("#### ✏️ 重命名簇")
+    
+    rename_col1, rename_col2 = st.columns([1, 2])
+    with rename_col1:
+        cluster_to_rename = st.selectbox(
+            "选择簇",
+            options=cluster_ids,
+            format_func=lambda x: f"{cluster_names.get(x, f'Cluster {x}')}",
+            key="rename_cluster"
+        )
+    
+    current_name = cluster_names.get(cluster_to_rename, "")
+    
+    with rename_col2:
+        new_name = st.text_input(
+            "新名称",
+            value=current_name,
+            key=f"rename_input_{cluster_to_rename}"
+        )
+        if st.button("更新名称"):
+            st.session_state.cluster_names[cluster_to_rename] = new_name
+            st.success("✅ 已更新簇名称")
+            st.rerun()
+    
+    st.divider()
+    st.subheader("4. 论文详情")
+    
+    selected_cluster = st.selectbox(
+        "选择主题查看论文",
+        options=cluster_ids,
+        format_func=lambda x: f"{cluster_names.get(x, f'Cluster {x}')} ({len(grouped.get(x, []))}篇)"
+    )
+    
+    if selected_cluster is not None:
+        cluster_papers = grouped.get(selected_cluster, [])
+        
+        for paper in cluster_papers:
+            meta = paper["metadata"]
+            title = meta.get("title", "Unknown Title")
+            venue = meta.get("venue", "Unknown")
+            year = meta.get("year", "N/A")
+            authors = meta.get("authors", [])
+            
+            if isinstance(authors, list):
+                authors_str = ", ".join(authors[:3]) + ("..." if len(authors) > 3 else "")
+            else:
+                authors_str = str(authors)
+            
+            with st.container(border=True):
+                st.markdown(f"### 📄 {title}")
+                st.caption(f"👤 {authors_str} | 🏛️ {venue} ({year})")
+                
+                if abstract := meta.get("abstract"):
+                    with st.expander("查看摘要"):
+                        st.write(abstract)
